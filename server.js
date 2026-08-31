@@ -1,58 +1,46 @@
 const express = require('express');
 const cors = require('cors');
-const app = express();
+const { exec } = require('child_process');
+const fs = require('fs');
 
+const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// Track connected service states
-let connectedServices = {
-    discord: false,
-    google: false
-};
+let connectedServices = { discord: false, google: false };
 
-app.get('/', (req, res) => {
-    res.send('AI Runner Server Active');
-});
+app.get('/', (req, res) => res.send('AI Runner Agent Active'));
 
-// 1. Redirect user to official Discord OAuth2 prompt
-app.get('/auth/discord', (req, res) => {
-    const CLIENT_ID = '1543773602795757638';
-    const REDIRECT_URI = encodeURIComponent('https://my-ai-runner.onrender.com/auth/discord/callback');
-    const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=identify%20bot`;
-    
-    res.redirect(discordAuthUrl);
-});
+// 1. Real AI Command Execution Endpoint
+app.post('/agent/execute', async (req, res) => {
+    const { prompt, apiKey } = req.body;
 
-// 2. Handle approval callback from Discord
-app.get('/auth/discord/callback', (req, res) => {
-    const { code } = req.query;
-    
-    if (code) {
-        connectedServices.discord = true;
-        res.send(`
-            <html>
-                <body style="background:#090d16;color:#10b981;font-family:sans-serif;text-align:center;padding-top:50px;">
-                    <h2>✅ Successfully Authorized!</h2>
-                    <p>You can close this tab and return to your Studio workspace.</p>
-                    <script>
-                        if (window.opener) {
-                            window.opener.postMessage({ service: 'discord', status: 'connected' }, '*');
-                            setTimeout(() => window.close(), 1500);
-                        }
-                    </script>
-                </body>
-            </html>
-        `);
-    } else {
-        res.status(400).send('Authorization was canceled or failed.');
+    if (!prompt) {
+        return res.status(400).json({ status: 'error', message: 'No prompt provided.' });
     }
-});
 
-// Check status endpoint
-app.get('/auth/status', (req, res) => {
-    res.json(connectedServices);
-});
+    // Call Google Gemini API to write real code based on prompt
+    try {
+        const keyToUse = apiKey || process.env.GEMINI_API_KEY;
+        if (!keyToUse) {
+            return res.status(400).json({ status: 'error', message: 'API key required for real AI execution.' });
+        }
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+        const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+        const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyToUse}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{
+                    parts: [{
+                        text: `You are a real software developer agent. Write valid production JavaScript code for: ${prompt}. Return ONLY code inside standard syntax without conversational prose.`
+                    }]
+                }]
+            })
+        });
+
+        const data = await aiResponse.json();
+        let rawCode = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        
+        // Clean markdown code blocks if present
+        rawCode = rawCode.replace(/```javascript/g, '').replace(/
