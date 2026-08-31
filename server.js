@@ -2,11 +2,10 @@ const express = require('express');
 const { google } = require('googleapis');
 const { exec } = require('child_process');
 const fs = require('fs');
-const https = require('https');
 
 const app = express();
 
-// Enable CORS
+// Enable CORS for front-end connections
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
@@ -17,7 +16,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// Health check endpoint
+// Root health check endpoint
 app.get('/', (req, res) => {
     res.send('AI Runner Agent Active');
 });
@@ -46,24 +45,7 @@ function getYouTubeOAuthClient() {
     );
 }
 
-// 2. Direct YouTube Authorization Route
-app.get('/auth/youtube', (req, res) => {
-    try {
-        const oauth2Client = getYouTubeOAuthClient();
-        const authUrl = oauth2Client.generateAuthUrl({
-            access_type: 'offline',
-            scope: [
-                'https://www.googleapis.com/auth/youtube.readonly',
-                'https://www.googleapis.com/auth/userinfo.profile'
-            ]
-        });
-        res.redirect(authUrl);
-    } catch (err) {
-        res.status(500).send('Error generating YouTube auth URL: ' + err.message);
-    }
-});
-
-// 3. YouTube OAuth Callback Handler
+// 2. YouTube OAuth Callback Handler
 app.get('/auth/youtube/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) return res.status(400).send('No authorization code provided.');
@@ -110,10 +92,27 @@ app.get('/auth/youtube/callback', async (req, res) => {
     }
 });
 
-// 4. Dynamic Fallback Route for Other Services
+// 3. Case-Insensitive Authorization Router
 app.get('/auth/:service', (req, res) => {
-    const service = req.params.service;
-    res.send(`<h2>Authorization page for ${service}</h2>`);
+    const serviceName = req.params.service.toLowerCase();
+
+    if (serviceName === 'youtube') {
+        try {
+            const oauth2Client = getYouTubeOAuthClient();
+            const authUrl = oauth2Client.generateAuthUrl({
+                access_type: 'offline',
+                scope: [
+                    'https://www.googleapis.com/auth/youtube.readonly',
+                    'https://www.googleapis.com/auth/userinfo.profile'
+                ]
+            });
+            return res.redirect(authUrl);
+        } catch (err) {
+            return res.status(500).send('Error generating YouTube auth URL: ' + err.message);
+        }
+    }
+
+    res.send(`<h2>Authorization page for ${req.params.service}</h2>`);
 });
 
 const PORT = process.env.PORT || 3000;
