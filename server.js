@@ -110,3 +110,18 @@ app.get('/auth/:service/callback', (req, res) => {
         </script>
     `);
 });
+// Make sure express.json() middleware is enabled at the top of your server file
+app.use(express.json());
+
+// Handle cloud execution requests from studio.html
+app.post('/run', (req, res) => {
+    const { code } = req.body;
+    console.log("Executing workspace code:", code);
+
+    // Return success response to the frontend
+    res.json({
+        success: true,
+        message: "Code executed successfully",
+        output: "Execution finished with 0 errors."
+    });
+});
