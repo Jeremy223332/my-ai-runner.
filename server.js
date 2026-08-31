@@ -67,3 +67,63 @@ app.post('/start-bot', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server active on port ${PORT}`));
+const express = require('express');
+const cors = require('cors');
+const app = express();
+
+app.use(cors({ origin: '*' }));
+app.use(express.json());
+
+// In-memory session state (for demonstration)
+let connectedServices = {
+    discord: false,
+    google: false
+};
+
+app.get('/', (req, res) => {
+    res.send('AI Runner Server Active');
+});
+
+// 1. Trigger OAuth Redirect for Discord
+app.get('/auth/discord', (req, res) => {
+    // Replace CLIENT_ID and REDIRECT_URI with your registered developer app details
+    const CLIENT_ID = 'YOUR_DISCORD_CLIENT_ID';
+    const REDIRECT_URI = encodeURIComponent('https://my-ai-runner.onrender.com/auth/discord/callback');
+    const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code&scope=identify%20bot`;
+    
+    res.redirect(discordAuthUrl);
+});
+
+// 2. Handle OAuth Callback from Discord
+app.get('/auth/discord/callback', (req, res) => {
+    const { code } = req.query;
+    
+    if (code) {
+        connectedServices.discord = true;
+        // Redirect back to your local studio page with a success flag
+        res.send(`
+            <html>
+                <body style="background:#090d16;color:#10b981;font-family:sans-serif;text-align:center;padding-top:50px;">
+                    <h2>✅ Successfully Authorized!</h2>
+                    <p>You can close this tab and return to your Studio.</p>
+                    <script>
+                        if (window.opener) {
+                            window.opener.postMessage({ service: 'discord', status: 'connected' }, '*');
+                            setTimeout(() => window.close(), 2000);
+                        }
+                    </script>
+                </body>
+            </html>
+        `);
+    } else {
+        res.status(400).send('Authorization failed or was canceled.');
+    }
+});
+
+// Check status from studio page
+app.get('/auth/status', (req, res) => {
+    res.json(connectedServices);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
