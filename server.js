@@ -44,3 +44,69 @@ app.post('/agent/execute', async (req, res) => {
         
         // Clean markdown code blocks if present
         rawCode = rawCode.replace(/```javascript/g, '').replace(/
+const express = require('express');
+const app = express();
+
+// 1. Initiate OAuth (Redirects user or renders authorization flow)
+app.get('/auth/:service', (req, res) => {
+    const service = req.params.service; // e.g., 'youtube', 'discord'
+
+    // Example redirect logic:
+    // If you have real OAuth keys setup, redirect to provider's auth URL.
+    // Otherwise, simulate the authorization step for testing:
+    
+    res.send(`
+        <html>
+            <head><title>Authorize ${service}</title></head>
+            <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #111827; color: white;">
+                <h2>Authorize ${service.toUpperCase()} Connection</h2>
+                <p>Click below to complete authorization for this app.</p>
+                <button onclick="sendSuccess()" style="padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Authorize</button>
+                <button onclick="sendFailure()" style="padding: 10px 20px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-left: 10px;">Cancel / Fail</button>
+
+                <script>
+                    function sendSuccess() {
+                        if (window.opener) {
+                            window.opener.postMessage({ status: 'connected', service: '${service}' }, '*');
+                        }
+                        window.close();
+                    }
+
+                    function sendFailure() {
+                        if (window.opener) {
+                            window.opener.postMessage({ status: 'failed', service: '${service}', reason: 'User canceled authorization' }, '*');
+                        }
+                        window.close();
+                    }
+                </script>
+            </body>
+        </html>
+    `);
+});
+
+// 2. Handle actual OAuth callback (if using real OAuth redirect URIs)
+app.get('/auth/:service/callback', (req, res) => {
+    const service = req.params.service;
+    const error = req.query.error;
+
+    if (error) {
+        return res.send(`
+            <script>
+                if (window.opener) {
+                    window.opener.postMessage({ status: 'failed', service: '${service}', reason: '${error}' }, '*');
+                }
+                window.close();
+            </script>
+        `);
+    }
+
+    // On successful auth verification:
+    res.send(`
+        <script>
+            if (window.opener) {
+                window.opener.postMessage({ status: 'connected', service: '${service}' }, '*');
+            }
+            window.close();
+        </script>
+    `);
+});
