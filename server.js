@@ -1,4 +1,5 @@
 const express = require('express');
+const { google } = require('googleapis');
 const { exec } = require('child_process');
 const fs = require('fs');
 
@@ -9,9 +10,7 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
 
@@ -22,146 +21,84 @@ app.get('/', (req, res) => {
     res.send('AI Runner Agent Active');
 });
 
-// 1. Cloud Code Execution Endpoint
-app.post('/run', (req, res) => {
-    const { code, script } = req.body;
-    const codeToRun = code || script || 'console.log("No code provided");';
+// Helper function to create Google OAuth Client
+function getYouTubeOAuthClient() {
+    return new google.auth.OAuth2(
+        process.env.YOUTUBE_CLIENT_ID,
+        process.env.YOUTUBE_CLIENT_SECRET,
+        `${process.env.BASE_URL || 'https://my-ai-runner-daaa8l142hec739v8org.onrender.com'}/auth/youtube/callback`
+    );
+}
 
-    fs.writeFileSync('./workspace_app.js', codeToRun);
-
-    exec('node workspace_app.js', (error, stdout, stderr) => {
-        if (error) {
-            return res.json({ status: 'error', output: stderr || error.message });
-        }
-        res.json({ status: 'success', output: stdout || 'Executed successfully with zero errors.' });
-    });
+// 1. Direct YouTube Authorization Route (Triggers Google Sign-In)
+app.get('/auth/youtube', (req, res) => {
+    try {
+        const oauth2Client = getYouTubeOAuthClient();
+        const authUrl = oauth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: [
+                'https://www.googleapis.com/auth/youtube.readonly',
+                'https://www.googleapis.com/auth/userinfo.profile'
+            ]
+        });
+        res.redirect(authUrl);
+    } catch (err) {
+        res.status(500).send('Error generating YouTube auth URL: ' + err.message);
+    }
 });
 
-// 2. Dynamic OAuth Authorization Route with Profile Display
-app.get('/auth/:service', (req, res) => {
-    const service = req.params.service;
-    
-    const mockUser = {
-        displayName: "Jeremiah",
-        username: "@JeremiahUser",
-        avatarUrl: "[https://api.dicebear.com/7.x/bottts/svg?seed=Jeremiah](https://api.dicebear.com/7.x/bottts/svg?seed=Jeremiah)"
-    };
+// 2. YouTube OAuth Callback Handler
+app.get('/auth/youtube/callback', async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.status(400).send('No authorization code provided.');
 
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-            <head>
-                <title>Authorize ${service}</title>
-                <style>
-                    body {
-                        font-family: system-ui, -apple-system, sans-serif;
-                        text-align: center;
-                        padding: 40px 20px;
-                        background: #111827;
-                        color: white;
-                        margin: 0;
-                    }
-                    .card {
-                        background: #1f2937;
-                        padding: 24px;
-                        border-radius: 12px;
-                        max-width: 380px;
-                        margin: 0 auto;
-                        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-                        border: 1px solid #374151;
-                    }
-                    .avatar {
-                        width: 80px;
-                        height: 80px;
-                        border-radius: 50%;
-                        border: 3px solid #8b5cf6;
-                        margin-bottom: 12px;
-                        background-color: #0d1117;
-                    }
-                    .display-name {
-                        font-size: 1.25rem;
-                        font-weight: bold;
-                        margin: 4px 0;
-                    }
-                    .username {
-                        color: #9ca3af;
-                        font-size: 0.9rem;
-                        margin-bottom: 16px;
-                    }
-                    .info-box {
-                        background: #111827;
-                        padding: 10px 14px;
-                        border-radius: 8px;
-                        font-size: 0.85rem;
-                        color: #d1d5db;
-                        margin-bottom: 20px;
-                    }
-                    .btn-group {
-                        display: flex;
-                        gap: 10px;
-                        justify-content: center;
-                    }
-                    button {
-                        padding: 10px 18px;
-                        border: none;
-                        border-radius: 6px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        font-size: 0.9rem;
-                        flex: 1;
-                    }
-                    .btn-authorize { background: #10b981; color: white; }
-                    .btn-cancel { background: #ef4444; color: white; }
-                </style>
-            </head>
-            <body>
-                <div class="card">
-                    <img class="avatar" src="${mockUser.avatarUrl}" alt="User Avatar" />
-                    <div class="display-name">${mockUser.displayName}</div>
-                    <div class="username">${mockUser.username}</div>
+    try {
+        const oauth2Client = getYouTubeOAuthClient();
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
 
-                    <div class="info-box">
-                        Connecting to <strong>${service.toUpperCase()}</strong>.<br>
-                        Verify this is your account before proceeding.
-                    </div>
+        const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+        const channelRes = await youtube.channels.list({
+            mine: true,
+            part: ['snippet']
+        });
 
-                    <div class="btn-group">
-                        <button class="btn-authorize" onclick="sendSuccess()">Authorize</button>
-                        <button class="btn-cancel" onclick="sendFailure()">Cancel</button>
-                    </div>
-                </div>
+        const channel = channelRes.data.items?.[0]?.snippet;
+        const displayName = channel ? channel.title : 'YouTube User';
+        const avatarUrl = channel ? channel.thumbnails.default.url : '';
 
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <body style="background: #111827; color: white; font-family: sans-serif; text-align: center; padding: 40px;">
+                <h2>Authenticated with YouTube!</h2>
                 <script>
-                    function sendSuccess() {
-                        if (window.opener) {
-                            window.opener.postMessage({ 
-                                status: 'connected', 
-                                service: '${service}',
-                                user: {
-                                    displayName: '${mockUser.displayName}',
-                                    username: '${mockUser.username}'
-                                }
-                            }, '*');
-                        }
-                        window.close();
+                    if (window.opener) {
+                        window.opener.postMessage({
+                            status: 'connected',
+                            service: 'YouTube',
+                            user: {
+                                displayName: "${displayName}",
+                                avatarUrl: "${avatarUrl}"
+                            }
+                        }, '*');
                     }
-
-                    function sendFailure() {
-                        if (window.opener) {
-                            window.opener.postMessage({ 
-                                status: 'failed', 
-                                service: '${service}', 
-                                reason: 'User canceled authorization' 
-                            }, '*');
-                        }
-                        window.close();
-                    }
+                    window.close();
                 </script>
             </body>
-        </html>
-    `);
+            </html>
+        `);
+    } catch (error) {
+        console.error('OAuth Callback Error:', error);
+        res.status(500).send('Authentication failed: ' + error.message);
+    }
 });
 
-// Start Server
+// 3. Dynamic Fallback Route for Other Services
+app.get('/auth/:service', (req, res) => {
+    const service = req.params.service;
+    res.send(`<h2>Authorization page for ${service}</h2>`);
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server active on port ${PORT}`));
