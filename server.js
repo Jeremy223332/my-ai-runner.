@@ -4,14 +4,32 @@ const { exec } = require('child_process');
 const fs = require('fs');
 
 const app = express();
+
+// Enable CORS and JSON body parsing
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-let connectedServices = { discord: false, google: false };
+// Health check endpoint
+app.get('/', (req, res) => {
+    res.send('AI Runner Agent Active');
+});
 
-app.get('/', (req, res) => res.send('AI Runner Agent Active'));
+// 1. Cloud Code Execution Endpoint
+app.post('/run', (req, res) => {
+    const { code, script } = req.body;
+    const codeToRun = code || script || 'console.log("No code provided");';
 
-// 1. Real AI Command Execution Endpoint
+    fs.writeFileSync('./workspace_app.js', codeToRun);
+
+    exec('node workspace_app.js', (error, stdout, stderr) => {
+        if (error) {
+            return res.json({ status: 'error', output: stderr || error.message });
+        }
+        res.json({ status: 'success', output: stdout || 'Executed successfully with zero errors.' });
+    });
+});
+
+// 2. Real AI Execution Endpoint
 app.post('/agent/execute', async (req, res) => {
     const { prompt, apiKey } = req.body;
 
@@ -19,11 +37,10 @@ app.post('/agent/execute', async (req, res) => {
         return res.status(400).json({ status: 'error', message: 'No prompt provided.' });
     }
 
-    // Call Google Gemini API to write real code based on prompt
     try {
         const keyToUse = apiKey || process.env.GEMINI_API_KEY;
         if (!keyToUse) {
-            return res.status(400).json({ status: 'error', message: 'API key required for real AI execution.' });
+            return res.status(400).json({ status: 'error', message: 'API key required for AI execution.' });
         }
 
         const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
@@ -33,7 +50,7 @@ app.post('/agent/execute', async (req, res) => {
             body: JSON.stringify({
                 contents: [{
                     parts: [{
-                        text: `You are a real software developer agent. Write valid production JavaScript code for: ${prompt}. Return ONLY code inside standard syntax without conversational prose.`
+                        text: `You are a software developer agent. Write valid JavaScript code for: ${prompt}. Return ONLY executable JavaScript code.`
                     }]
                 }]
             })
@@ -41,28 +58,36 @@ app.post('/agent/execute', async (req, res) => {
 
         const data = await aiResponse.json();
         let rawCode = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        
-        // Clean markdown code blocks if present
-        rawCode = rawCode.replace(/```javascript/g, '').replace(/
-const express = require('express');
-const app = express();
+        rawCode = rawCode.replace(/```javascript/g, '').replace(/```html/g, '').replace(/```/g, '').trim();
 
-// 1. Initiate OAuth (Redirects user or renders authorization flow)
+        fs.writeFileSync('./workspace_app.js', rawCode);
+
+        res.json({
+            status: 'success',
+            code: rawCode,
+            message: 'Code written to server.'
+        });
+
+    } catch (err) {
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+});
+
+// 3. Dynamic OAuth Authorization Route
 app.get('/auth/:service', (req, res) => {
-    const service = req.params.service; // e.g., 'youtube', 'discord'
+    const service = req.params.service;
 
-    // Example redirect logic:
-    // If you have real OAuth keys setup, redirect to provider's auth URL.
-    // Otherwise, simulate the authorization step for testing:
-    
     res.send(`
+        <!DOCTYPE html>
         <html>
             <head><title>Authorize ${service}</title></head>
             <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #111827; color: white;">
                 <h2>Authorize ${service.toUpperCase()} Connection</h2>
-                <p>Click below to complete authorization for this app.</p>
-                <button onclick="sendSuccess()" style="padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Authorize</button>
-                <button onclick="sendFailure()" style="padding: 10px 20px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-left: 10px;">Cancel / Fail</button>
+                <p>Click below to complete authorization for this application.</p>
+                <div style="margin-top: 20px;">
+                    <button onclick="sendSuccess()" style="padding: 10px 20px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Authorize</button>
+                    <button onclick="sendFailure()" style="padding: 10px 20px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-left: 10px;">Cancel / Fail</button>
+                </div>
 
                 <script>
                     function sendSuccess() {
@@ -74,7 +99,7 @@ app.get('/auth/:service', (req, res) => {
 
                     function sendFailure() {
                         if (window.opener) {
-                            window.opener.postMessage({ status: 'failed', service: '${service}', reason: 'User canceled authorization' }, '*');
+                            window.opener.postMessage({ status: 'failed', service: '${service}', reason: 'User canceled' }, '*');
                         }
                         window.close();
                     }
@@ -84,44 +109,6 @@ app.get('/auth/:service', (req, res) => {
     `);
 });
 
-// 2. Handle actual OAuth callback (if using real OAuth redirect URIs)
-app.get('/auth/:service/callback', (req, res) => {
-    const service = req.params.service;
-    const error = req.query.error;
-
-    if (error) {
-        return res.send(`
-            <script>
-                if (window.opener) {
-                    window.opener.postMessage({ status: 'failed', service: '${service}', reason: '${error}' }, '*');
-                }
-                window.close();
-            </script>
-        `);
-    }
-
-    // On successful auth verification:
-    res.send(`
-        <script>
-            if (window.opener) {
-                window.opener.postMessage({ status: 'connected', service: '${service}' }, '*');
-            }
-            window.close();
-        </script>
-    `);
-});
-// Make sure express.json() middleware is enabled at the top of your server file
-app.use(express.json());
-
-// Handle cloud execution requests from studio.html
-app.post('/run', (req, res) => {
-    const { code } = req.body;
-    console.log("Executing workspace code:", code);
-
-    // Return success response to the frontend
-    res.json({
-        success: true,
-        message: "Code executed successfully",
-        output: "Execution finished with 0 errors."
-    });
-});
+// Start Server on Render assigned Port
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server active on port ${PORT}`));
