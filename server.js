@@ -2,6 +2,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const { exec } = require('child_process');
 const fs = require('fs');
+const https = require('https');
 
 const app = express();
 
@@ -36,24 +37,84 @@ app.post('/run', (req, res) => {
     });
 });
 
-// 2. Real AI Execution Endpoint
-app.post('/agent/execute', async (req, res) => {
-    const { prompt, apiKey } = req.body;
-    if (!prompt) return res.status(400).json({ status: 'error', message: 'No prompt provided.' });
+// Helper function to create Google OAuth Client
+function getYouTubeOAuthClient() {
+    return new google.auth.OAuth2(
+        process.env.YOUTUBE_CLIENT_ID,
+        process.env.YOUTUBE_CLIENT_SECRET,
+        `${process.env.BASE_URL || 'https://my-ai-runner-daaa8l142hec739v8org.onrender.com'}/auth/youtube/callback`
+    );
+}
+
+// 2. Direct YouTube Authorization Route
+app.get('/auth/youtube', (req, res) => {
+    try {
+        const oauth2Client = getYouTubeOAuthClient();
+        const authUrl = oauth2Client.generateAuthUrl({
+            access_type: 'offline',
+            scope: [
+                'https://www.googleapis.com/auth/youtube.readonly',
+                'https://www.googleapis.com/auth/userinfo.profile'
+            ]
+        });
+        res.redirect(authUrl);
+    } catch (err) {
+        res.status(500).send('Error generating YouTube auth URL: ' + err.message);
+    }
+});
+
+// 3. YouTube OAuth Callback Handler
+app.get('/auth/youtube/callback', async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.status(400).send('No authorization code provided.');
 
     try {
-        const keyToUse = apiKey || process.env.GEMINI_API_KEY;
-        if (!keyToUse) return res.status(400).json({ status: 'error', message: 'API key required.' });
+        const oauth2Client = getYouTubeOAuthClient();
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
 
-        const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
-        const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keyToUse}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: `You are a software developer agent. Write valid JavaScript code for: ${prompt}. Return ONLY executable JavaScript code.` }] }]
-            })
+        const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+        const channelRes = await youtube.channels.list({
+            mine: true,
+            part: ['snippet']
         });
 
-        const data = await aiResponse.json();
-        let rawCode = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        rawCode = rawCode.replace(/```javascript/g, '').replace(/
+        const channel = channelRes.data.items?.[0]?.snippet;
+        const displayName = channel ? channel.title : 'YouTube User';
+        const avatarUrl = channel ? channel.thumbnails.default.url : '';
+
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <body style="background: #111827; color: white; font-family: sans-serif; text-align: center; padding: 40px;">
+                <h2>Authenticated with YouTube!</h2>
+                <script>
+                    if (window.opener) {
+                        window.opener.postMessage({
+                            status: 'connected',
+                            service: 'YouTube',
+                            user: {
+                                displayName: "${displayName}",
+                                avatarUrl: "${avatarUrl}"
+                            }
+                        }, '*');
+                    }
+                    window.close();
+                </script>
+            </body>
+            </html>
+        `);
+    } catch (error) {
+        console.error('OAuth Callback Error:', error);
+        res.status(500).send('Authentication failed: ' + error.message);
+    }
+});
+
+// 4. Dynamic Fallback Route for Other Services
+app.get('/auth/:service', (req, res) => {
+    const service = req.params.service;
+    res.send(`<h2>Authorization page for ${service}</h2>`);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server active on port ${PORT}`));
